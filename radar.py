@@ -6,17 +6,15 @@ import warnings
 
 warnings.filterwarnings('ignore')
 
-st.set_page_config(page_title="BIST 100 Pusu Radarı", layout="wide")
+st.set_page_config(page_title="BIST 100 Pusu Radarı V8.0", layout="wide")
 st.title("🏛️ AKADEMİK FİNANS KONSEYİ")
-st.subheader("Borsa İstanbul (BIST 100) Geniş Çaplı Kuantitatif Radar (V7.1)")
+st.subheader("Borsa İstanbul (BIST 100) Kuantitatif Radar ve Backtest Motoru (V8.0)")
 
-# BELLEK YÖNETİMİ
 if 'bist_df' not in st.session_state:
     st.session_state.bist_df = None
 
 @st.cache_data(ttl=3600)
 def bist_listesini_getir():
-    # BIST 100 Ana Endeks Hisseleri (Genişletilmiş Ağ)
     bist_hisseler = [
         "AEFES", "AGHOL", "AHGAZ", "AKBNK", "AKCNS", "AKFGY", "AKFYE", "AKSA", "AKSEN", "ALARK", 
         "ALBRK", "ALFAS", "ARCLK", "ASELS", "ASTOR", "ASUZU", "AYDEM", "BAGFS", "BASGZ", "BIMAS", 
@@ -32,6 +30,27 @@ def bist_listesini_getir():
     ]
     return [hisse + ".IS" for hisse in bist_hisseler]
 
+def backtest_hesapla(data, limit=35, bekleme_suresi=10):
+    try:
+        sinyaller = data[data['RSI'] < limit]
+        if len(sinyaller) == 0: return 0.0, 0.0
+        kazanc_sayisi, toplam_getiri, gecerli_islem = 0, 0.0, 0
+        
+        for idx, row in sinyaller.iterrows():
+            sinyal_index = data.index.get_loc(idx)
+            if sinyal_index + bekleme_suresi < len(data):
+                alis = row['Close']
+                satis = data.iloc[sinyal_index + bekleme_suresi]['Close']
+                getiri = (satis - alis) / alis
+                toplam_getiri += getiri
+                if getiri > 0: kazanc_sayisi += 1
+                gecerli_islem += 1
+                
+        if gecerli_islem == 0: return 0.0, 0.0
+        return round((kazanc_sayisi / gecerli_islem) * 100, 1), round((toplam_getiri / gecerli_islem) * 100, 2)
+    except:
+        return 0.0, 0.0
+
 def radar_taramasi():
     tickers = bist_listesini_getir()
     macro_limit, micro_limit = 35, 30
@@ -42,17 +61,18 @@ def radar_taramasi():
     for i, ticker in enumerate(tickers):
         ilerleme_cubugu.progress((i + 1) / len(tickers))
         hisse_adi = ticker.replace('.IS', '')
-        durum_metni.text(f"🔍 Denetleniyor: {hisse_adi} ({i+1}/{len(tickers)})")
+        durum_metni.text(f"🔍 Taranıyor ve Test Ediliyor: {hisse_adi} ({i+1}/{len(tickers)})")
         
         try:
             hisse = yf.Ticker(ticker)
-            d_gunluk = hisse.history(period="60d")
-            if d_gunluk.empty: continue
+            d_gunluk = hisse.history(period="1y")
+            if len(d_gunluk) < 50: continue
             d_gunluk['RSI'] = ta.momentum.RSIIndicator(d_gunluk['Close']).rsi()
             rsi_g = d_gunluk['RSI'].iloc[-1]
             
-            # Hız Optimizasyonu: Sadece Makro olarak ucuzsa 15m veriyi indirir
             if rsi_g < macro_limit:
+                kazanma_orani, ortalama_getiri = backtest_hesapla(d_gunluk, macro_limit, 10)
+                
                 d_15m = hisse.history(period="5d", interval="15m")
                 if d_15m.empty: continue
                 d_15m['RSI'] = ta.momentum.RSIIndicator(d_15m['Close']).rsi()
@@ -64,6 +84,8 @@ def radar_taramasi():
                     "Hisse": hisse_adi,
                     "Makro RSI": round(rsi_g, 1),
                     "Mikro RSI": round(rsi_m, 1),
+                    "Tarihsel Kazanma (%)": kazanma_orani,
+                    "Ortalama Getiri (%)": ortalama_getiri,
                     "Fiyat (₺)": round(fiyat, 2),
                     "Pusu Limiti (₺)": round(fiyat * 0.995, 2),
                     "Kâr Al (₺)": round(fiyat * 1.07, 2)
@@ -74,17 +96,15 @@ def radar_taramasi():
     ilerleme_cubugu.empty()
     return pd.DataFrame(liste)
 
-if st.button("🚀 BIST 100 RADARINI ATEŞLE (Canlı Tarama)"):
-    with st.spinner("Borsa İstanbul'un kalbi (BIST 100) canlı taranıyor, lütfen 1-2 dakika bekleyin..."):
-        res = radar_taramasi()
-        st.session_state.bist_df = res
+if st.button("🚀 BIST 100 RADARINI VE BACKTESTİ ATEŞLE"):
+    with st.spinner("Borsa İstanbul canlı taranıyor ve geçmişi sorgulanıyor..."):
+        st.session_state.bist_df = radar_taramasi()
 
 if st.session_state.bist_df is not None:
     df = st.session_state.bist_df
     if len(df) > 0:
-        st.success(f"Analiz Tamamlandı: BIST 100 içinden {len(df)} adet 'Aşırı Cezalandırılmış' şirket bulundu.")
+        st.success(f"Analiz Tamamlandı: BIST 100 içinden {len(df)} aday bulundu.")
         st.dataframe(df, use_container_width=True)
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Sonuçları CSV Olarak İndir", csv, "bist100_pusu_adaylari.csv", "text/csv")
+        st.download_button("📥 CSV İndir", df.to_csv(index=False).encode('utf-8'), "bist100_backtest.csv", "text/csv")
     else:
-        st.warning("Bugün hiçbir BIST 100 hissesi Konsey'in katı ucuzluk kriterlerini karşılamadı. Nakitte kalıyoruz.")
+        st.warning("Kriterlere uyan hisse bulunamadı.")
